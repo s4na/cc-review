@@ -8,3 +8,6 @@ dist/
 *.sqlite-journal
 web/dist/
 web/node_modules/
+coverage/
+.jest-cache/
+*.tsbuildinfo
