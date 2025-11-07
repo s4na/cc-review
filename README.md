@@ -134,6 +134,35 @@ cronで定期的に実行する例:
 */10 * * * * cd /path/to/pr-ai-reviewer && npx pr-ai-reviewer run --use-selections >> ~/.pr-ai-reviewer/runner.log 2>&1
 ```
 
+## 開発
+
+### テストの実行
+
+```bash
+# 全テストを実行
+npm test
+
+# ウォッチモードでテスト
+npm run test:watch
+
+# カバレッジレポート生成
+npm run test:coverage
+```
+
+### ビルド
+
+```bash
+npm run build
+```
+
+### CI/CD
+
+GitHub Actionsによる自動テストが設定されています:
+
+- Node.js 20.x と 22.x でマトリックステスト
+- プッシュとPRで自動実行
+- ビルド、テスト、型チェックを実行
+
 ## ディレクトリ構造
 
 ```
