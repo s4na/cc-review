@@ -32,7 +32,7 @@ export class GitHubAdapter {
       }));
     } catch (error: any) {
       console.error(`Failed to list PRs for ${ownerRepo}:`, error.message);
-      return [];
+      throw new Error(`GitHub API error for ${ownerRepo}: ${error.message}`);
     }
   }
 
@@ -154,6 +154,9 @@ export class GitHubAdapter {
   }
 
   async getDiff(ownerRepo: string, prNumber: number): Promise<string> {
+    // Maximum diff size: 5MB to prevent OOM and respect Claude token limits
+    const MAX_DIFF_SIZE = 5 * 1024 * 1024;
+
     try {
       const { stdout } = await execa('gh', [
         'pr',
@@ -162,6 +165,17 @@ export class GitHubAdapter {
         '--repo',
         ownerRepo
       ]);
+
+      // Check diff size
+      if (stdout.length > MAX_DIFF_SIZE) {
+        const sizeMB = (stdout.length / (1024 * 1024)).toFixed(2);
+        console.warn(`[${ownerRepo}#${prNumber}] Diff size (${sizeMB}MB) exceeds limit, truncating...`);
+
+        // Truncate with a note
+        const truncated = stdout.substring(0, MAX_DIFF_SIZE);
+        const note = `\n\n... [DIFF TRUNCATED: Original size ${sizeMB}MB exceeded ${MAX_DIFF_SIZE / (1024 * 1024)}MB limit] ...`;
+        return truncated + note;
+      }
 
       return stdout;
     } catch (error: any) {

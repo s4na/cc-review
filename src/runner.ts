@@ -88,25 +88,44 @@ export class Runner {
   }
 
   private async getRepoList(options: RunnerOptions): Promise<string[]> {
+    let repos: string[];
+
     if (options.fromRepos) {
       // Read from file
       const fs = await import('fs');
       const content = fs.readFileSync(options.fromRepos, 'utf-8');
-      return content
+      repos = content
         .split('\n')
         .map(line => line.trim())
-        .filter(line => line.length > 0 && !line.startsWith('#'));
-    }
-
-    if (options.useSelections) {
+        .filter(line => {
+          if (line.length === 0 || line.startsWith('#')) {
+            return false;
+          }
+          // Validate repo format: owner/repo
+          if (!/^[\w\-\.]+\/[\w\-\.]+$/.test(line)) {
+            console.warn(`Invalid repository format: "${line}" (expected: owner/repo)`);
+            return false;
+          }
+          return true;
+        });
+    } else if (options.useSelections) {
       // Use selections from store
       const selections = this.selectionsStore.reload();
-      return selections.repos;
+      repos = selections.repos;
+    } else {
+      // Default: use selections
+      const selections = this.selectionsStore.reload();
+      repos = selections.repos;
     }
 
-    // Default: use selections
-    const selections = this.selectionsStore.reload();
-    return selections.repos;
+    // Validate all repos
+    return repos.filter(repo => {
+      if (!/^[\w\-\.]+\/[\w\-\.]+$/.test(repo)) {
+        console.warn(`Invalid repository format in selections: "${repo}" (expected: owner/repo)`);
+        return false;
+      }
+      return true;
+    });
   }
 
   private async processRepo(
@@ -115,7 +134,13 @@ export class Runner {
   ): Promise<{ total: number; processed: number }> {
     console.log(`\n[${ownerRepo}] Fetching open PRs...`);
 
-    const prs = await this.githubAdapter.listOpenPRs(ownerRepo);
+    let prs: PRInfo[];
+    try {
+      prs = await this.githubAdapter.listOpenPRs(ownerRepo);
+    } catch (error: any) {
+      console.error(`[${ownerRepo}] Failed to fetch PRs, skipping repository`);
+      return { total: 0, processed: 0 };
+    }
 
     if (prs.length === 0) {
       console.log(`[${ownerRepo}] No open PRs`);
@@ -196,15 +221,20 @@ export class Runner {
       return false;
     }
 
-    // Check cache
-    const cached = this.cacheStore.getPRCache(pr.owner, pr.repo, pr.number);
+    // Try to acquire lock atomically - this prevents race conditions
+    const lockAcquired = this.cacheStore.tryAcquireLock(
+      pr.owner,
+      pr.repo,
+      pr.number,
+      commit.sha
+    );
 
-    if (cached && cached.latestSha === commit.sha && cached.myCommentAfterSha) {
-      // Already commented on this SHA
+    if (!lockAcquired) {
+      // Already processed or being processed by another instance
       return false;
     }
 
-    // Check if we have commented after the latest commit
+    // Double-check with GitHub API if we have commented after the latest commit
     const hasComment = await this.githubAdapter.hasMyCommentAfter(
       ownerRepo,
       pr.number,
@@ -212,7 +242,7 @@ export class Runner {
     );
 
     if (hasComment) {
-      // Update cache
+      // Update cache to mark as commented
       this.cacheStore.markCommented(pr.owner, pr.repo, pr.number, commit.sha);
       return false;
     }

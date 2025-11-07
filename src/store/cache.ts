@@ -84,6 +84,41 @@ export class CacheStore {
     `).run(owner, repo, prNumber, sha, new Date().toISOString());
   }
 
+  /**
+   * Try to acquire a lock for processing a PR. Returns true if lock was acquired.
+   * This prevents concurrent processing of the same PR.
+   */
+  tryAcquireLock(owner: string, repo: string, prNumber: number, sha: string): boolean {
+    try {
+      // Use a transaction to atomically check and insert
+      const transaction = this.db.transaction(() => {
+        const existing = this.db.prepare(`
+          SELECT latest_sha, my_comment_after_sha FROM pr_cache
+          WHERE owner = ? AND repo = ? AND pr_number = ?
+        `).get(owner, repo, prNumber) as any;
+
+        // If already commented on this SHA, don't process
+        if (existing && existing.latest_sha === sha && existing.my_comment_after_sha === 1) {
+          return false;
+        }
+
+        // Insert a processing lock (my_comment_after_sha = 0 means "processing")
+        this.db.prepare(`
+          INSERT OR REPLACE INTO pr_cache
+            (owner, repo, pr_number, latest_sha, my_comment_after_sha, last_checked_at)
+          VALUES (?, ?, ?, ?, 0, ?)
+        `).run(owner, repo, prNumber, sha, new Date().toISOString());
+
+        return true;
+      });
+
+      return transaction();
+    } catch (error) {
+      // If there's a constraint violation or other error, assume lock failed
+      return false;
+    }
+  }
+
   startRun(): number {
     const result = this.db.prepare(`
       INSERT INTO runs (started_at, status)
